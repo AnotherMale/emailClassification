@@ -1,3 +1,4 @@
+$ cat main.py
 import os
 import numpy as np
 import pandas as pd
@@ -26,6 +27,15 @@ tokenizer = BertTokenizerFast.from_pretrained('bert-base-uncased', use_fast=True
 MAX_LEN = 128
 
 def encode_texts(texts):
+    """
+    Encode a list of texts into token IDs and attention masks for BERT.
+
+    Args:
+        texts (list or pd.Series): List of text strings to encode.
+
+    Returns:
+        dict: A dictionary containing 'input_ids' and 'attention_mask' tensors.
+    """
     with torch.no_grad():
         return tokenizer(
             list(texts),
@@ -36,7 +46,16 @@ def encode_texts(texts):
         )
 
 class PhishingEmailClassifier(nn.Module):
+    """
+    A BERT-based classifier for phishing email detection.
+    """
     def __init__(self, unfreeze_bert: bool = False):
+        """
+        Initialize the classifier model.
+
+        Args:
+            unfreeze_bert (bool): If False, freeze BERT weights during training.
+        """
         super().__init__()
         self.bert = BertModel.from_pretrained('bert-base-uncased')
         if not unfreeze_bert:
@@ -46,11 +65,36 @@ class PhishingEmailClassifier(nn.Module):
         self.classifier = nn.Linear(self.bert.config.hidden_size, 1)
 
     def forward(self, input_ids, attention_mask):
+        """
+        Forward pass of the model.
+
+        Args:
+            input_ids (torch.Tensor): Token IDs tensor.
+            attention_mask (torch.Tensor): Attention mask tensor.
+
+        Returns:
+            torch.Tensor: Logits for the binary classification.
+        """
         output = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         cls_token = output.last_hidden_state[:, 0, :]
         return self.classifier(self.dropout(cls_token))
 
 def train_model(model, train_loader, val_loader, lr=2e-5, epochs=2, patience=2, fold=0):
+    """
+    Train the classifier model with early stopping.
+
+    Args:
+        model (nn.Module): The model to train.
+        train_loader (DataLoader): DataLoader for training data.
+        val_loader (DataLoader): DataLoader for validation data.
+        lr (float): Learning rate.
+        epochs (int): Maximum number of training epochs.
+        patience (int): Number of epochs to wait for improvement before stopping.
+        fold (int): Fold number for logging.
+
+    Returns:
+        nn.Module: The trained model with best validation performance.
+    """
     optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=lr)
     criterion = nn.BCEWithLogitsLoss()
     best_loss = float('inf')
@@ -99,6 +143,16 @@ def train_model(model, train_loader, val_loader, lr=2e-5, epochs=2, patience=2, 
     return model
 
 def evaluate_model(model, val_loader):
+    """
+    Evaluate the model's performance on validation data.
+
+    Args:
+        model (nn.Module): The trained model.
+        val_loader (DataLoader): DataLoader for validation data.
+
+    Returns:
+        tuple: Contains accuracy, F1 score, precision, recall, and confusion matrix.
+    """
     model.eval()
     all_logits, all_labels = [], []
 
@@ -122,6 +176,7 @@ def evaluate_model(model, val_loader):
         confusion_matrix(all_labels, all_preds)
     )
 
+# Hyperparameters and setup
 batch_sizes = [16, 32]
 learning_rates = [2e-5, 3e-5]
 EPOCHS = 2
@@ -132,9 +187,11 @@ X = df.text_combined.values
 y = df.label.values
 skf = StratifiedKFold(n_splits=FOLDS, shuffle=True, random_state=SEED)
 
+# Initialize tokenizer and base model
 tokenizer = BertTokenizerFast.from_pretrained('bert-base-uncased', use_fast=True)
 base_model = BertModel.from_pretrained('bert-base-uncased')
 
+# Encode all data once
 encodings = tokenizer(
     list(df['text_combined']),
     padding='max_length',
@@ -146,6 +203,7 @@ all_input_ids = encodings['input_ids']
 all_attention_mask = encodings['attention_mask']
 all_labels = torch.tensor(df['label'].values, dtype=torch.float)
 
+# Loop over hyperparameter combinations
 for batch_size in batch_sizes:
     for lr in learning_rates:
         print(f"Testing: Batch Size={batch_size}, Learning Rate={lr}")
@@ -165,29 +223,3 @@ for batch_size in batch_sizes:
 
             train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
             val_loader = DataLoader(val_dataset, batch_size=batch_size)
-
-            model = PhishingEmailClassifier(unfreeze_bert=False)
-            model.bert = base_model
-            trained_model = train_model(model, train_loader, val_loader, lr=lr, epochs=EPOCHS, patience=2, fold=fold)
-
-            acc, f1, prec, rec, cm = evaluate_model(trained_model, val_loader)
-            print(f" Fold {fold} -- Acc: {acc:.4f} | F1: {f1:.4f} | Precision: {prec:.4f} | Recall: {rec:.4f}")
-            fold_metrics.append((acc, f1, prec, rec))
-
-        avg_metrics = np.mean(fold_metrics, axis=0)
-        results.append({
-            "batch_size": batch_size,
-            "learning_rate": lr,
-            "avg_accuracy": avg_metrics[0],
-            "avg_f1": avg_metrics[1],
-            "avg_precision": avg_metrics[2],
-            "avg_recall": avg_metrics[3],
-        })
-
-result_df = pd.DataFrame(results)
-print(result_df.sort_values(by="avg_f1", ascending=False))
-
-plt.figure(figsize=(10,6))
-sns.barplot(data=result_df, x="batch_size", y="avg_f1", hue="learning_rate")
-plt.title("F1 Score across Batch Size and Learning Rate")
-plt.show()
