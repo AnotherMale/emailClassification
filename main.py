@@ -222,3 +222,31 @@ for batch_size in batch_sizes:
 
             train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
             val_loader = DataLoader(val_dataset, batch_size=batch_size)
+
+            model = PhishingEmailClassifier(unfreeze_bert=False)
+            model.bert = base_model
+            trained_model = train_model(model, train_loader, val_loader, lr=lr, epochs=EPOCHS, patience=2, fold=fold)
+
+            acc, f1, prec, rec, cm = evaluate_model(trained_model, val_loader)
+            print(f" Fold {fold} -- Acc: {acc:.4f} | F1: {f1:.4f} | Precision: {prec:.4f} | Recall: {rec:.4f}")
+            fold_metrics.append((acc, f1, prec, rec))
+
+        avg_metrics = np.mean(fold_metrics, axis=0)
+        results.append({
+            "batch_size": batch_size,
+            "learning_rate": lr,
+            "avg_accuracy": avg_metrics[0],
+            "avg_f1": avg_metrics[1],
+            "avg_precision": avg_metrics[2],
+            "avg_recall": avg_metrics[3],
+        })
+
+# Summarize results
+result_df = pd.DataFrame(results)
+print(result_df.sort_values(by="avg_f1", ascending=False))
+
+# Plotting results
+plt.figure(figsize=(10,6))
+sns.barplot(data=result_df, x="batch_size", y="avg_f1", hue="learning_rate")
+plt.title("F1 Score across Batch Size and Learning Rate")
+plt.show()
